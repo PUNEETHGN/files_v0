@@ -11,9 +11,9 @@ interface Category {
 const DEFAULT_CATEGORIES: Category[] = [
   { id: "LandDocuments", name: "Land Documents", icon: "document" },
   { id: "Puneeth", name: "Puneeth G N", icon: "user" },
-  { id: "Pragathi", name: "Pragathi", icon: "user" },
-  { id: "Kusuma", name: "Kusuma", icon: "user" },
-  { id: "Narayana", name: "Narayana", icon: "user" },
+  { id: "Pragathi", name: "Pragathi M K", icon: "user" },
+  { id: "Kusuma", name: "Kusuma D S", icon: "user" },
+  { id: "Narayana", name: "NarayanaG P", icon: "user" },
 ];
 
 interface FileItem {
