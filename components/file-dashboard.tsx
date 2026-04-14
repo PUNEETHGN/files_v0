@@ -114,33 +114,56 @@ export function FileDashboard() {
     setIsUploading(true);
     
     try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("fileName", fileName.trim());
-      formData.append("category", uploadCategory);
+      // Get file extension
+      const fileExtension = selectedFile.name.includes(".") 
+        ? "." + selectedFile.name.split(".").pop() 
+        : "";
+      const fullFileName = `[${uploadCategory}] ${fileName.trim()}${fileExtension}`;
 
-      const response = await fetch("/api/files/upload", {
+      // Step 1: Initialize resumable upload session on server
+      const initResponse = await fetch("/api/files/init-upload", {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fileName: fullFileName,
+          mimeType: selectedFile.type || "application/octet-stream",
+          category: uploadCategory,
+        }),
       });
 
-      const data = await response.json();
+      const initData = await initResponse.json();
 
-      if (data.success) {
-        await fetchFiles();
-        setIsUploadModalOpen(false);
-        setFileName("");
-        setUploadCategory("");
-        setSelectedFile(null);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = "";
-        }
-      } else {
-        alert("Failed to upload file: " + (data.error || "Unknown error"));
+      if (!initData.uploadUrl) {
+        throw new Error(initData.error || "Failed to initialize upload");
+      }
+
+      // Step 2: Upload file directly to Google Drive
+      const uploadResponse = await fetch(initData.uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": selectedFile.type || "application/octet-stream",
+        },
+        body: selectedFile,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error("Failed to upload file to Google Drive");
+      }
+
+      // Success - refresh file list
+      await fetchFiles();
+      setIsUploadModalOpen(false);
+      setFileName("");
+      setUploadCategory("");
+      setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
       }
     } catch (error) {
       console.error("Upload error:", error);
-      alert("Failed to upload file");
+      alert("Failed to upload file: " + (error instanceof Error ? error.message : "Unknown error"));
     } finally {
       setIsUploading(false);
     }
