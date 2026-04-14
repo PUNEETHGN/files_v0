@@ -9,8 +9,8 @@ interface Category {
 }
 
 const DEFAULT_CATEGORIES: Category[] = [
-  { id: "LandDocuments", name: "LandDocuments", icon: "document" },
-  { id: "Puneeth", name: "Puneeth", icon: "user" },
+  { id: "LandDocuments", name: "Land Documents", icon: "document" },
+  { id: "Puneeth", name: "Puneeth G N", icon: "user" },
   { id: "Pragathi", name: "Pragathi", icon: "user" },
   { id: "Kusuma", name: "Kusuma", icon: "user" },
   { id: "Narayana", name: "Narayana", icon: "user" },
