@@ -9,21 +9,22 @@ interface Category {
 }
 
 const DEFAULT_CATEGORIES: Category[] = [
-  { id: "land-documents", name: "LandDocuments", icon: "document" },
-  { id: "puneeth", name: "Puneeth", icon: "user" },
-  { id: "pragathi", name: "Pragathi", icon: "user" },
-  { id: "kusuma", name: "Kusuma", icon: "user" },
-  { id: "narayana", name: "Narayana", icon: "user" },
+  { id: "LandDocuments", name: "LandDocuments", icon: "document" },
+  { id: "Puneeth", name: "Puneeth", icon: "user" },
+  { id: "Pragathi", name: "Pragathi", icon: "user" },
+  { id: "Kusuma", name: "Kusuma", icon: "user" },
+  { id: "Narayana", name: "Narayana", icon: "user" },
 ];
 
 interface FileItem {
   id: string;
   name: string;
   originalName: string;
-  type: string;
+  mimeType: string;
   category: string;
-  uploadedAt: string;
-  fileData?: string;
+  createdTime: string;
+  webViewLink?: string;
+  webContentLink?: string;
 }
 
 export function FileDashboard() {
@@ -42,21 +43,16 @@ export function FileDashboard() {
   const [loginError, setLoginError] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load files and categories from localStorage on mount
+  // Load files from Google Drive on mount
   useEffect(() => {
-    const storedFiles = localStorage.getItem("fileManager_files");
+    fetchFiles();
+    
     const storedCategories = localStorage.getItem("fileManager_categories");
     const storedLogin = sessionStorage.getItem("fileManager_loggedIn");
-    
-    if (storedFiles) {
-      try {
-        setFiles(JSON.parse(storedFiles));
-      } catch (e) {
-        console.error("Failed to parse stored files:", e);
-      }
-    }
     
     if (storedCategories) {
       try {
@@ -71,12 +67,21 @@ export function FileDashboard() {
     }
   }, []);
 
-  // Save files to localStorage whenever they change
-  useEffect(() => {
-    if (files.length > 0) {
-      localStorage.setItem("fileManager_files", JSON.stringify(files));
+  const fetchFiles = async () => {
+    try {
+      setIsLoading(true);
+      const response = await fetch("/api/files/list");
+      const data = await response.json();
+      
+      if (data.files) {
+        setFiles(data.files);
+      }
+    } catch (error) {
+      console.error("Error fetching files:", error);
+    } finally {
+      setIsLoading(false);
     }
-  }, [files]);
+  };
 
   // Save categories to localStorage whenever they change
   useEffect(() => {
@@ -103,55 +108,74 @@ export function FileDashboard() {
     }
   };
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
     if (!selectedFile || !fileName.trim() || !uploadCategory) return;
 
-    const extension = selectedFile.name.includes(".")
-      ? `.${selectedFile.name.split(".").pop()}`
-      : "";
+    setIsUploading(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      formData.append("fileName", fileName.trim());
+      formData.append("category", uploadCategory);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const newFile: FileItem = {
-        id: crypto.randomUUID(),
-        name: fileName.trim() + extension,
-        originalName: selectedFile.name,
-        type: selectedFile.type || "unknown",
-        category: uploadCategory,
-        uploadedAt: new Date().toISOString(),
-        fileData: e.target?.result as string,
-      };
-
-      setFiles((prev) => {
-        const updated = [newFile, ...prev];
-        localStorage.setItem("fileManager_files", JSON.stringify(updated));
-        return updated;
+      const response = await fetch("/api/files/upload", {
+        method: "POST",
+        body: formData,
       });
-      setIsUploadModalOpen(false);
-      setFileName("");
-      setUploadCategory("");
-      setSelectedFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+
+      const data = await response.json();
+
+      if (data.success) {
+        await fetchFiles();
+        setIsUploadModalOpen(false);
+        setFileName("");
+        setUploadCategory("");
+        setSelectedFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+      } else {
+        alert("Failed to upload file: " + (data.error || "Unknown error"));
       }
-    };
-    reader.readAsDataURL(selectedFile);
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert("Failed to upload file");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (!isLoggedIn) return;
-    setFiles((prev) => {
-      const updated = prev.filter((file) => file.id !== id);
-      localStorage.setItem("fileManager_files", JSON.stringify(updated));
-      return updated;
-    });
+    
+    try {
+      const response = await fetch("/api/files/delete", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ fileId: id }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setFiles((prev) => prev.filter((file) => file.id !== id));
+      } else {
+        alert("Failed to delete file");
+      }
+    } catch (error) {
+      console.error("Delete error:", error);
+      alert("Failed to delete file");
+    }
   };
 
   const handleAddCategory = () => {
     if (!newCategoryName.trim() || !isLoggedIn) return;
     
     const newCategory: Category = {
-      id: newCategoryName.toLowerCase().replace(/\s+/g, "-"),
+      id: newCategoryName.trim(),
       name: newCategoryName.trim(),
       icon: "user",
     };
@@ -193,14 +217,14 @@ export function FileDashboard() {
   };
 
   const getFileIcon = (type: string) => {
-    if (type.startsWith("image/")) {
+    if (type?.startsWith("image/")) {
       return (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
       );
     }
-    if (type.includes("pdf")) {
+    if (type?.includes("pdf")) {
       return (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -227,6 +251,12 @@ export function FileDashboard() {
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
       </svg>
     );
+  };
+
+  const openFile = (file: FileItem) => {
+    if (file.webViewLink) {
+      window.open(file.webViewLink, "_blank");
+    }
   };
 
   return (
@@ -293,7 +323,11 @@ export function FileDashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {selectedCategory === null ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          </div>
+        ) : selectedCategory === null ? (
           /* Category Tiles View */
           <div>
             <div className="flex items-center justify-between mb-6">
@@ -337,16 +371,17 @@ export function FileDashboard() {
                     {files.slice(0, 5).map((file) => (
                       <div
                         key={file.id}
-                        className="flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors"
+                        onClick={() => openFile(file)}
+                        className="flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors cursor-pointer"
                       >
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center text-primary">
-                            {getFileIcon(file.type)}
+                            {getFileIcon(file.mimeType)}
                           </div>
                           <div>
                             <p className="font-medium text-foreground">{file.name}</p>
                             <p className="text-xs text-muted-foreground">
-                              {categories.find((c) => c.id === file.category)?.name} - {formatDate(file.uploadedAt)}
+                              {categories.find((c) => c.id === file.category)?.name} - {formatDate(file.createdTime)}
                             </p>
                           </div>
                         </div>
@@ -412,7 +447,7 @@ export function FileDashboard() {
               </div>
             ) : (
               <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="grid grid-cols-12 gap-4 px-4 py-3 bg-secondary/50 text-sm font-medium text-muted-foreground border-b border-border">
+                <div className={`grid ${isLoggedIn ? 'grid-cols-12' : 'grid-cols-10'} gap-4 px-4 py-3 bg-secondary/50 text-sm font-medium text-muted-foreground border-b border-border`}>
                   <div className="col-span-7">Name</div>
                   <div className="col-span-3">Uploaded</div>
                   {isLoggedIn && <div className="col-span-2 text-right">Actions</div>}
@@ -421,24 +456,28 @@ export function FileDashboard() {
                   {filteredFiles.map((file) => (
                     <div
                       key={file.id}
-                      className="grid grid-cols-12 gap-4 px-4 py-3 items-center hover:bg-secondary/30 transition-colors"
+                      onClick={() => openFile(file)}
+                      className={`grid ${isLoggedIn ? 'grid-cols-12' : 'grid-cols-10'} gap-4 px-4 py-3 items-center hover:bg-secondary/30 transition-colors cursor-pointer`}
                     >
                       <div className="col-span-7 flex items-center gap-3">
                         <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center text-primary">
-                          {getFileIcon(file.type)}
+                          {getFileIcon(file.mimeType)}
                         </div>
                         <div className="min-w-0">
                           <p className="font-medium text-foreground truncate">{file.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">{file.type || "Unknown type"}</p>
+                          <p className="text-xs text-muted-foreground truncate">{file.mimeType || "Unknown type"}</p>
                         </div>
                       </div>
                       <div className="col-span-3 text-sm text-muted-foreground">
-                        {formatDate(file.uploadedAt)}
+                        {formatDate(file.createdTime)}
                       </div>
                       {isLoggedIn && (
                         <div className="col-span-2 flex justify-end">
                           <button
-                            onClick={() => handleDelete(file.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(file.id);
+                            }}
                             className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
                             title="Delete file"
                           >
@@ -484,9 +523,9 @@ export function FileDashboard() {
 
       {/* Upload Modal */}
       {isUploadModalOpen && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-card border border-border rounded-lg shadow-xl w-full max-w-md">
-            <div className="flex items-center justify-between p-4 border-b border-border">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-border rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-semibold text-foreground">Upload File</h2>
               <button
                 onClick={() => {
@@ -495,7 +534,7 @@ export function FileDashboard() {
                   setUploadCategory("");
                   setSelectedFile(null);
                 }}
-                className="text-muted-foreground hover:text-foreground transition-colors"
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -503,7 +542,7 @@ export function FileDashboard() {
               </button>
             </div>
 
-            <div className="p-4 space-y-4">
+            <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">
                   File Name
@@ -513,7 +552,7 @@ export function FileDashboard() {
                   value={fileName}
                   onChange={(e) => setFileName(e.target.value)}
                   placeholder="Enter file name"
-                  className="w-full px-4 py-2.5 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
+                  className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 />
               </div>
 
@@ -524,7 +563,7 @@ export function FileDashboard() {
                 <select
                   value={uploadCategory}
                   onChange={(e) => setUploadCategory(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-secondary border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
+                  className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 >
                   <option value="">Select a category</option>
                   {categories.map((cat) => (
@@ -537,26 +576,27 @@ export function FileDashboard() {
 
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">
-                  Select File
+                  Choose File
                 </label>
                 <div
                   onClick={() => fileInputRef.current?.click()}
                   className="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
                 >
                   {selectedFile ? (
-                    <div className="flex items-center justify-center gap-2 text-foreground">
-                      <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div>
+                      <svg className="w-8 h-8 text-primary mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
-                      <span className="truncate max-w-[200px]">{selectedFile.name}</span>
+                      <p className="text-sm text-foreground font-medium">{selectedFile.name}</p>
+                      <p className="text-xs text-muted-foreground mt-1">Click to change</p>
                     </div>
                   ) : (
-                    <>
+                    <div>
                       <svg className="w-8 h-8 text-muted-foreground mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                       </svg>
-                      <p className="text-muted-foreground">Click to select a file</p>
-                    </>
+                      <p className="text-sm text-muted-foreground">Click to select a file</p>
+                    </div>
                   )}
                 </div>
                 <input
@@ -566,26 +606,25 @@ export function FileDashboard() {
                   className="hidden"
                 />
               </div>
-            </div>
 
-            <div className="flex gap-3 p-4 border-t border-border">
-              <button
-                onClick={() => {
-                  setIsUploadModalOpen(false);
-                  setFileName("");
-                  setUploadCategory("");
-                  setSelectedFile(null);
-                }}
-                className="flex-1 px-4 py-2.5 bg-secondary text-foreground rounded-lg font-medium hover:bg-secondary/80 transition-colors"
-              >
-                Cancel
-              </button>
               <button
                 onClick={handleUpload}
-                disabled={!selectedFile || !fileName.trim() || !uploadCategory}
-                className="flex-1 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!selectedFile || !fileName.trim() || !uploadCategory || isUploading}
+                className="w-full bg-primary text-primary-foreground py-2 rounded-lg font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                Upload
+                {isUploading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground"></div>
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                    Upload File
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -593,17 +632,17 @@ export function FileDashboard() {
       )}
 
       {/* Add Category Modal */}
-      {isAddCategoryModalOpen && isLoggedIn && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-card border border-border rounded-lg shadow-xl w-full max-w-md">
-            <div className="flex items-center justify-between p-4 border-b border-border">
-              <h2 className="text-lg font-semibold text-foreground">Add New Category</h2>
+      {isAddCategoryModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-border rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-semibold text-foreground">Add Category</h2>
               <button
                 onClick={() => {
                   setIsAddCategoryModalOpen(false);
                   setNewCategoryName("");
                 }}
-                className="text-muted-foreground hover:text-foreground transition-colors"
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -611,7 +650,7 @@ export function FileDashboard() {
               </button>
             </div>
 
-            <div className="p-4">
+            <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">
                   Category Name
@@ -621,30 +660,14 @@ export function FileDashboard() {
                   value={newCategoryName}
                   onChange={(e) => setNewCategoryName(e.target.value)}
                   placeholder="Enter category name"
-                  className="w-full px-4 py-2.5 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      handleAddCategory();
-                    }
-                  }}
+                  className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 />
               </div>
-            </div>
 
-            <div className="flex gap-3 p-4 border-t border-border">
-              <button
-                onClick={() => {
-                  setIsAddCategoryModalOpen(false);
-                  setNewCategoryName("");
-                }}
-                className="flex-1 px-4 py-2.5 bg-secondary text-foreground rounded-lg font-medium hover:bg-secondary/80 transition-colors"
-              >
-                Cancel
-              </button>
               <button
                 onClick={handleAddCategory}
                 disabled={!newCategoryName.trim()}
-                className="flex-1 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full bg-primary text-primary-foreground py-2 rounded-lg font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Add Category
               </button>
@@ -655,18 +678,18 @@ export function FileDashboard() {
 
       {/* Login Modal */}
       {isLoginModalOpen && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-card border border-border rounded-lg shadow-xl w-full max-w-md">
-            <div className="flex items-center justify-between p-4 border-b border-border">
-              <h2 className="text-lg font-semibold text-foreground">Login</h2>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-border rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-semibold text-foreground">Admin Login</h2>
               <button
                 onClick={() => {
                   setIsLoginModalOpen(false);
-                  setLoginError("");
                   setUsername("");
                   setPassword("");
+                  setLoginError("");
                 }}
-                className="text-muted-foreground hover:text-foreground transition-colors"
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -674,9 +697,9 @@ export function FileDashboard() {
               </button>
             </div>
 
-            <div className="p-4 space-y-4">
+            <div className="space-y-4">
               {loginError && (
-                <div className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-lg text-sm">
+                <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-2 rounded-lg text-sm">
                   {loginError}
                 </div>
               )}
@@ -690,7 +713,7 @@ export function FileDashboard() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Enter username"
-                  className="w-full px-4 py-2.5 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
+                  className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 />
               </div>
 
@@ -703,32 +726,14 @@ export function FileDashboard() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter password"
-                  className="w-full px-4 py-2.5 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      handleLogin();
-                    }
-                  }}
+                  className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 />
               </div>
-            </div>
 
-            <div className="flex gap-3 p-4 border-t border-border">
-              <button
-                onClick={() => {
-                  setIsLoginModalOpen(false);
-                  setLoginError("");
-                  setUsername("");
-                  setPassword("");
-                }}
-                className="flex-1 px-4 py-2.5 bg-secondary text-foreground rounded-lg font-medium hover:bg-secondary/80 transition-colors"
-              >
-                Cancel
-              </button>
               <button
                 onClick={handleLogin}
-                disabled={!username || !password}
-                className="flex-1 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!username.trim() || !password.trim()}
+                className="w-full bg-primary text-primary-foreground py-2 rounded-lg font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Login
               </button>
