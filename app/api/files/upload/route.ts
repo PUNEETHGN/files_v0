@@ -1,6 +1,5 @@
-import { google } from "googleapis";
 import { NextRequest, NextResponse } from "next/server";
-import { Readable } from "stream";
+import { google } from "googleapis";
 
 const auth = new google.auth.GoogleAuth({
   credentials: {
@@ -9,8 +8,6 @@ const auth = new google.auth.GoogleAuth({
   },
   scopes: ["https://www.googleapis.com/auth/drive"],
 });
-
-const drive = google.drive({ version: "v3", auth });
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,36 +20,87 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
+    const accessToken = await auth.getAccessToken();
     const buffer = Buffer.from(await file.arrayBuffer());
-    const stream = Readable.from(buffer);
-
-    const fileMetadata = {
+    
+    const metadata = {
       name: `${category}__${fileName}__${file.name}`,
       parents: [process.env.GOOGLE_FOLDER_ID as string],
     };
 
-    const media = {
-      mimeType: file.type,
-      body: stream,
-    };
+    // Step 1: Initiate resumable upload session
+    const initiateResponse = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Type": file.type || "application/octet-stream",
+          "X-Upload-Content-Length": buffer.length.toString(),
+        },
+        body: JSON.stringify(metadata),
+      }
+    );
 
-    const response = await drive.files.create({
-      requestBody: fileMetadata,
-      media: media,
+    if (!initiateResponse.ok) {
+      const errorText = await initiateResponse.text();
+      console.error("Failed to initiate upload:", errorText);
+      return NextResponse.json(
+        { error: "Failed to initiate upload" },
+        { status: 500 }
+      );
+    }
+
+    // Get the resumable upload URI from response headers
+    const uploadUri = initiateResponse.headers.get("Location");
+    
+    if (!uploadUri) {
+      return NextResponse.json(
+        { error: "No upload URI received" },
+        { status: 500 }
+      );
+    }
+
+    // Step 2: Upload file content to the resumable URI
+    const uploadResponse = await fetch(uploadUri, {
+      method: "PUT",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "Content-Length": buffer.length.toString(),
+      },
+      body: buffer,
+    });
+
+    if (!uploadResponse.ok) {
+      const errorText = await uploadResponse.text();
+      console.error("Failed to upload file content:", errorText);
+      return NextResponse.json(
+        { error: "Failed to upload file content" },
+        { status: 500 }
+      );
+    }
+
+    const uploadedFile = await uploadResponse.json();
+
+    // Step 3: Get file details including webViewLink
+    const drive = google.drive({ version: "v3", auth });
+    const fileDetails = await drive.files.get({
+      fileId: uploadedFile.id,
       fields: "id, name, mimeType, createdTime, webViewLink, webContentLink",
     });
 
     return NextResponse.json({
       success: true,
       file: {
-        id: response.data.id,
+        id: fileDetails.data.id,
         name: fileName,
         originalName: file.name,
         category: category,
-        mimeType: response.data.mimeType,
-        createdTime: response.data.createdTime,
-        webViewLink: response.data.webViewLink,
-        webContentLink: response.data.webContentLink,
+        mimeType: fileDetails.data.mimeType,
+        createdTime: fileDetails.data.createdTime,
+        webViewLink: fileDetails.data.webViewLink,
+        webContentLink: fileDetails.data.webContentLink,
       },
     });
   } catch (error) {
