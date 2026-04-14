@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
 
+// Increase body size limit for file uploads (100MB)
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 const auth = new google.auth.GoogleAuth({
   credentials: {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
