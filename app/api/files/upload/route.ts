@@ -1,142 +1,127 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
+import { Readable } from "stream";
 
-// App Router config for large file uploads
+// Required for Vercel serverless
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-function getAuth() {
-  return new google.auth.GoogleAuth({
+/**
+ * Validate required env variables
+ */
+function validateEnv() {
+  const required = [
+    "GOOGLE_CLIENT_EMAIL",
+    "GOOGLE_PRIVATE_KEY",
+    "GOOGLE_FOLDER_ID",
+  ];
+
+  for (const key of required) {
+    if (!process.env[key]) {
+      throw new Error(`Missing environment variable: ${key}`);
+    }
+  }
+}
+
+/**
+ * Google Auth Client
+ */
+function getDriveClient() {
+  const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_CLIENT_EMAIL,
-      private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      private_key: process.env.GOOGLE_PRIVATE_KEY!.replace(/\\n/g, "\n"),
     },
     scopes: ["https://www.googleapis.com/auth/drive"],
   });
+
+  return google.drive({ version: "v3", auth });
 }
 
+/**
+ * Convert File → Stream
+ */
+async function fileToStream(file: File) {
+  const buffer = Buffer.from(await file.arrayBuffer());
+  return Readable.from(buffer);
+}
+
+/**
+ * API Handler
+ */
 export async function POST(request: NextRequest) {
+  const startTime = Date.now();
+
   try {
-    console.log("[v0] Starting file upload...");
-    
+    validateEnv();
+
     const formData = await request.formData();
-    const file = formData.get("file") as File;
-    const fileName = formData.get("fileName") as string;
-    const category = formData.get("category") as string;
 
-    console.log("[v0] File received:", fileName, "Category:", category);
+    const file = formData.get("file") as File | null;
+    const fileName = formData.get("fileName") as string | null;
+    const category = formData.get("category") as string | null;
 
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
-    }
-
-    if (!process.env.GOOGLE_CLIENT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_FOLDER_ID) {
-      console.log("[v0] Missing environment variables");
+    if (!file || !fileName || !category) {
       return NextResponse.json(
-        { error: "Google Drive credentials not configured" },
-        { status: 500 }
+        { error: "file, fileName, and category are required" },
+        { status: 400 }
       );
     }
 
-    const auth = getAuth();
-    const accessToken = await auth.getAccessToken();
-    
-    console.log("[v0] Got access token");
-
-    const buffer = Buffer.from(await file.arrayBuffer());
-    
-    const metadata = {
-      name: `${category}__${fileName}__${file.name}`,
-      parents: [process.env.GOOGLE_FOLDER_ID as string],
-    };
-
-    console.log("[v0] Initiating resumable upload...");
-
-    // Step 1: Initiate resumable upload session
-    const initiateResponse = await fetch(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json; charset=UTF-8",
-          "X-Upload-Content-Type": file.type || "application/octet-stream",
-          "X-Upload-Content-Length": buffer.length.toString(),
-        },
-        body: JSON.stringify(metadata),
-      }
-    );
-
-    if (!initiateResponse.ok) {
-      const errorText = await initiateResponse.text();
-      console.error("[v0] Failed to initiate upload:", errorText);
+    // Optional: file size validation (recommended for Vercel)
+    const MAX_SIZE_MB = 10;
+    if (file.size > MAX_SIZE_MB * 1024 * 1024) {
       return NextResponse.json(
-        { error: "Failed to initiate upload: " + errorText },
-        { status: 500 }
+        { error: `File exceeds ${MAX_SIZE_MB}MB limit` },
+        { status: 413 }
       );
     }
 
-    // Get the resumable upload URI from response headers
-    const uploadUri = initiateResponse.headers.get("Location");
-    
-    if (!uploadUri) {
-      console.error("[v0] No upload URI received");
-      return NextResponse.json(
-        { error: "No upload URI received" },
-        { status: 500 }
-      );
-    }
+    const drive = getDriveClient();
+    const stream = await fileToStream(file);
 
-    console.log("[v0] Uploading file content...");
-
-    // Step 2: Upload file content to the resumable URI
-    const uploadResponse = await fetch(uploadUri, {
-      method: "PUT",
-      headers: {
-        "Content-Type": file.type || "application/octet-stream",
-        "Content-Length": buffer.length.toString(),
+    const uploadResponse = await drive.files.create({
+      requestBody: {
+        name: `${category}__${fileName}__${file.name}`,
+        parents: [process.env.GOOGLE_FOLDER_ID!],
       },
-      body: buffer,
-    });
-
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      console.error("[v0] Failed to upload file content:", errorText);
-      return NextResponse.json(
-        { error: "Failed to upload file content: " + errorText },
-        { status: 500 }
-      );
-    }
-
-    const uploadedFile = await uploadResponse.json();
-    console.log("[v0] File uploaded, getting details...");
-
-    // Step 3: Get file details including webViewLink
-    const drive = google.drive({ version: "v3", auth });
-    const fileDetails = await drive.files.get({
-      fileId: uploadedFile.id,
+      media: {
+        mimeType: file.type || "application/octet-stream",
+        body: stream,
+      },
       fields: "id, name, mimeType, createdTime, webViewLink, webContentLink",
     });
 
-    console.log("[v0] Upload complete:", fileDetails.data.id);
+    const fileData = uploadResponse.data;
 
     return NextResponse.json({
       success: true,
       file: {
-        id: fileDetails.data.id,
+        id: fileData.id,
         name: fileName,
         originalName: file.name,
-        category: category,
-        mimeType: fileDetails.data.mimeType,
-        createdTime: fileDetails.data.createdTime,
-        webViewLink: fileDetails.data.webViewLink,
-        webContentLink: fileDetails.data.webContentLink,
+        category,
+        mimeType: fileData.mimeType,
+        createdTime: fileData.createdTime,
+        webViewLink: fileData.webViewLink,
+        webContentLink: fileData.webContentLink,
+      },
+      meta: {
+        uploadTimeMs: Date.now() - startTime,
       },
     });
-  } catch (error) {
-    console.error("[v0] Upload error:", error);
+
+  } catch (error: any) {
+    console.error("❌ Upload Error:", {
+      message: error.message,
+      stack: error.stack,
+    });
+
     return NextResponse.json(
-      { error: "Failed to upload file: " + (error instanceof Error ? error.message : String(error)) },
+      {
+        error: "Upload failed",
+        details: error.message,
+      },
       { status: 500 }
     );
   }
